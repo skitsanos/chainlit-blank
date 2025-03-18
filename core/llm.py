@@ -1,5 +1,9 @@
 import os
-from typing import List, Optional, Dict, Any, TypedDict
+from typing import List, Optional, Dict, Any, TypedDict, Union, Literal
+
+# Import async clients
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 
 class LLMResponse(TypedDict):
@@ -10,34 +14,37 @@ class LLMResponse(TypedDict):
     response_id: Optional[str]
 
 
-from anthropic import Anthropic
-from openai import OpenAI
+# Define message structure
+class Message(TypedDict):
+    """Structure for a single message in a conversation."""
+    role: Literal["user", "assistant", "system", "developer"]
+    content: str
 
 
-class LLMClient:
-    """Client for interacting with various LLM providers including OpenAI, Anthropic, and Ollama."""
+class AsyncLLMClient:
+    """Async client for interacting with various LLM providers including OpenAI, Anthropic, and Ollama."""
 
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
         """
-        Initialize LLM clients.
+        Initialize async LLM clients.
 
         Args:
             base_url: Optional base URL for the OpenAI API
             api_key: Optional API key (falls back to environment variables)
         """
-        self.openai_client = OpenAI(
+        self.openai_client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or os.getenv("OPENAI_API_KEY")
         )
-        self.anthropic_client = Anthropic(
+        self.anthropic_client = AsyncAnthropic(
             api_key=api_key or os.getenv("ANTHROPIC_API_KEY")
         )
 
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY")
 
-    def response(
+    async def response(
             self,
-            user_input: str,
+            user_input: Union[str, List[Message]],
             model: str,
             instructions: Optional[str] = None,
             tools: Optional[List[Dict[str, Any]]] = None,
@@ -48,10 +55,10 @@ class LLMClient:
             **kwargs
     ) -> LLMResponse:
         """
-        Get a response from an LLM.
+        Get a response from an LLM asynchronously.
 
         Args:
-            user_input: The user's input text
+            user_input: Either a string or a list of message objects with role and content
             model: Model identifier (e.g., "claude-3-opus-20240229", "gpt-4o")
             instructions: System instructions for the model
             tools: Tool definitions for function calling
@@ -76,7 +83,7 @@ class LLMClient:
 
         try:
             if model.startswith(("claude", "anthropic")):
-                return self._get_anthropic_response(
+                return await self._get_anthropic_response(
                     user_input=user_input,
                     model=model,
                     instructions=instructions,
@@ -87,7 +94,7 @@ class LLMClient:
                 )
             elif any(model.startswith(prefix) for prefix in
                      ["gpt", "o1", "o3", "text-", "dall-e"]) or self.api_key == "ollama":
-                return self._get_openai_response(
+                return await self._get_openai_response(
                     user_input=user_input,
                     model=model,
                     instructions=instructions,
@@ -104,9 +111,40 @@ class LLMClient:
             # Re-raise with more context
             raise Exception(f"Error getting response from {model}: {str(e)}") from e
 
-    def _get_anthropic_response(
+    def _prepare_messages(
             self,
-            user_input: str,
+            user_input: Union[str, List[Message]],
+            instructions: Optional[str] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Prepare messages based on user input type.
+
+        Args:
+            user_input: Either a string or list of Message objects
+            instructions: Optional system instructions
+
+        Returns:
+            List of message dictionaries formatted for API calls
+        """
+        messages = []
+
+        # Add system message if instructions are provided
+        if instructions:
+            messages.append({"role": "system", "content": instructions})
+
+        # Process based on input type
+        if isinstance(user_input, str):
+            messages.append({"role": "user", "content": user_input})
+        else:
+            # Convert Message objects to the format expected by the APIs
+            for msg in user_input:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+
+        return messages
+
+    async def _get_anthropic_response(
+            self,
+            user_input: Union[str, List[Message]],
             model: str,
             instructions: str,
             tools: Optional[List[Dict[str, Any]]],
@@ -114,13 +152,30 @@ class LLMClient:
             max_tokens: int,
             **kwargs
     ) -> LLMResponse:
-        """Get response from Anthropic's Claude models."""
-        message = self.anthropic_client.messages.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": instructions},
+        """Get response from Anthropic's Claude models asynchronously."""
+        # Prepare messages for Anthropic API
+        anthropic_messages = []
+
+        # Handle string input
+        if isinstance(user_input, str):
+            anthropic_messages = [
                 {"role": "user", "content": user_input}
-            ],
+            ]
+        else:
+            # Handle message list - map developer role to system for Claude
+            for msg in user_input:
+                role = "system" if msg["role"] == "developer" else msg["role"]
+                if role not in ["user", "assistant", "system"]:
+                    role = "user"  # Default fallback for unsupported roles
+                anthropic_messages.append({"role": role, "content": msg["content"]})
+
+        # Always ensure system message is first for Claude
+        if instructions and not any(msg["role"] == "system" for msg in anthropic_messages):
+            anthropic_messages.insert(0, {"role": "system", "content": instructions})
+
+        message = await self.anthropic_client.messages.create(
+            model=model,
+            messages=anthropic_messages,
             tools=tools,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -134,9 +189,9 @@ class LLMClient:
             "response_id": None  # Claude doesn't provide a response ID in the same way
         }
 
-    def _get_openai_response(
+    async def _get_openai_response(
             self,
-            user_input: str,
+            user_input: Union[str, List[Message]],
             model: str,
             instructions: str,
             tools: Optional[List[Dict[str, Any]]],
@@ -146,23 +201,42 @@ class LLMClient:
             previous_response_id: Optional[str] = None,
             **kwargs
     ) -> LLMResponse:
-        """Get response from OpenAI or Ollama models using either the responses or chat completions API."""
+        """Get response from OpenAI or Ollama models asynchronously."""
         if use_responses_api:
             # Using the Responses API
-            response_params = {
-                "model": model,
-                "input": user_input,
-                "instructions": instructions,
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-                **kwargs
-            }
+            if isinstance(user_input, str):
+                # String input for Responses API
+                response_params = {
+                    "model": model,
+                    "input": user_input,
+                    "instructions": instructions,
+                    "temperature": temperature,
+                    "max_output_tokens": max_tokens,
+                    "tools": tools,
+                    **kwargs
+                }
+            else:
+                # Message list input for Responses API
+                response_params = {
+                    "model": model,
+                    "input": user_input,  # OpenAI Responses API accepts message list directly
+                    "temperature": temperature,
+                    "max_output_tokens": max_tokens,
+                    "tools": tools,
+                    **kwargs
+                }
+
+                print(tools)
+
+                # Only add instructions if no developer message is present
+                if instructions and not any(msg["role"] == "developer" for msg in user_input):
+                    response_params["instructions"] = instructions
 
             # Only add previous_response_id if it's provided
             if previous_response_id:
                 response_params["previous_response_id"] = previous_response_id
 
-            response = self.openai_client.responses.create(**response_params)
+            response = await self.openai_client.responses.create(**response_params)
 
             return {
                 "text": response.output_text,
@@ -172,12 +246,11 @@ class LLMClient:
             }
         else:
             # Using the Chat Completions API
-            completion = self.openai_client.chat.completions.create(
+            messages = self._prepare_messages(user_input, instructions)
+
+            completion = await self.openai_client.chat.completions.create(
                 model=model,
-                messages=[
-                    {"role": "system", "content": instructions},
-                    {"role": "user", "content": user_input}
-                ],
+                messages=messages,
                 tools=tools,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -192,25 +265,44 @@ class LLMClient:
             }
 
 
-if __name__ == "__main__":
-    # Example usage
-    llm = LLMClient()
+# Example usage with async/await
+import asyncio
+
+
+async def main():
+    llm = AsyncLLMClient()
     try:
-        # Get a response using the OpenAI Responses API
-        response = llm.response("Tell me a short joke", "gpt-4o-mini")
-        print(f"Response: {response['text']}")
-        print(f"Tokens used: input={response['input_tokens']}, output={response['output_tokens']}")
+        # Example 1: Simple string input
+        response = await llm.response("Tell me a short joke", "gpt-4o")
+        print(f"Response (string input): {response['text']}")
+        print(f"Tokens: input={response['input_tokens']}, output={response['output_tokens']}")
 
-        if response['response_id']:
-            print(f"Response ID: {response['response_id']}")
+        # Example 2: Message list input
+        messages = [
+            {"role": "developer", "content": "Talk like a pirate."},
+            {"role": "user", "content": "Are semicolons optional in JavaScript?"}
+        ]
 
-            # Example of how to use the response_id for a follow-up question
-            follow_up_response = llm.response(
-                "Tell me another one",
-                "gpt-4o-mini",
-                previous_response_id=response['response_id']
+        response2 = await llm.response(
+            messages,
+            "gpt-4o",
+            use_responses_api=True
+        )
+
+        print(f"\nResponse (message list input): {response2['text']}")
+
+        # Example 3: Follow-up with previous_response_id
+        if response2['response_id']:
+            follow_up = await llm.response(
+                "What about in Python?",
+                "gpt-4o",
+                previous_response_id=response2['response_id']
             )
-            print(f"\nFollow-up response: {follow_up_response['text']}")
+            print(f"\nFollow-up response: {follow_up['text']}")
 
     except Exception as e:
         print(f"Error: {e}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
