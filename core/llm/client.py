@@ -201,6 +201,7 @@ class AsyncLLMClient:
                     model=model,
                     instructions=instructions,
                     tools=provider_tools,
+                    tool_registry=self.tool_registry,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     **kwargs
