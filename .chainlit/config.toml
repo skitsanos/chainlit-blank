@@ -55,12 +55,12 @@ sample_rate = 24000
 # Name of the assistant.
 name = "AI Assistant"
 
+# Description of the assistant. This is used for HTML tags.
+description = "Interctive AI Assistant powered by OpenAI Responses API"
+
 default_theme = "light"
 
 # layout = "wide"
-
-# Description of the assistant. This is used for HTML tags.
-description = "Interctive AI Assistant powered by OpenAI Responses API"
 
 # Chain of Thought (CoT) display mode. Can be "hidden", "tool_call" or "full".
 cot = "full"

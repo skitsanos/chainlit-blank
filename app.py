@@ -1,7 +1,7 @@
 import logging
 
 import chainlit as cl
-from chainlit.input_widget import Select, Slider
+from chainlit.input_widget import Select, Slider, TextInput
 
 from core.commands import assistant_commands
 from core.llm import LLMClient, LLMResponse
@@ -42,6 +42,13 @@ async def start():
                 min=0,
                 max=2,
                 step=0.1,
+            ),
+            TextInput(
+                id="instructions",
+                label="Instructions",
+                placeholder="You are a helpful assistant.",
+                initial="You are a helpful assistant.",
+                multiline=True,
             ),
         ]
     ).send()
