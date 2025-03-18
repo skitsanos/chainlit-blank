@@ -1,0 +1,17 @@
+{
+  "custom_fonts": [
+    "https://fonts.googleapis.com/css?family=IBM+Plex+Sans:400,500,700&display=swap",
+    "https://fonts.googleapis.com/css?family=IBM+Plex+Mono:400,500,700&display=swap"
+  ],
+  "variables": {
+    "light": {
+      "--font-sans": "IBM Plex Sans, sans-serif",
+      "--font-mono": "IBM Plex Mono, monospace",
+      "--primary": "348 83.3% 47.1%"
+    },
+    "dark": {
+      "--font-sans": "IBM Plex Sans, sans-serif",
+      "--font-mono": "IBM Plex Mono, monospace"
+    }
+  }
+}

@@ -1,6 +1,7 @@
 .files/
 .idea/
 .venv/
+.chainlit/translations
 *.pyc
 *.pyo
 Taskfile.yml

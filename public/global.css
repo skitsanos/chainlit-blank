@@ -1,0 +1,18 @@
+.login-page {
+  /* The CSS selector below is an example; inspect the login page in your browser’s DevTools
+     to determine the exact selector used by Chainlit’s login page container. */
+  background-image: url('/public/path/to/your/background.jpg') !important;
+  background-size: cover !important;
+  background-repeat: no-repeat !important;
+  background-position: center center !important;
+}
+
+#chat-settings {
+  background-color: #f0f0f0 !important; /* Light gray background */
+  border-radius: 8px !important; /* Rounded corners */
+  padding: 2rem !important; /* Padding around the settings container */
+}
+
+#chat-settings > div:nth-child(2) {
+   padding-bottom: 1rem;
+}

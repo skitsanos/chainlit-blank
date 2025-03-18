@@ -1,5 +1,6 @@
 chainlit
 numpy
+anthropic
 openai
 duckduckgo-search
 mako
