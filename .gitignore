@@ -1,0 +1,6 @@
+.files/
+.idea/
+.venv/
+*.pyc
+*.pyo
+Taskfile.yml

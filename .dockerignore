@@ -1,0 +1,7 @@
+.idea/
+.venv/
+.storage/
+__pycache__/
+tooling/
+*.pyc
+Taskfile*

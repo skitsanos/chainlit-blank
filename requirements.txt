@@ -1,0 +1,5 @@
+chainlit
+numpy
+openai
+duckduckgo-search
+mako
