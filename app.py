@@ -6,19 +6,29 @@ from chainlit.input_widget import Select, Slider, TextInput
 
 from core.commands import assistant_commands
 from core.llm import AsyncLLMClient, LLMResponse
+from core.tooling import ToolRegistry
+from tools.date_and_time import today
 
 logger = logging.getLogger(__name__)
 
 MODELS = [
     "gpt-4o",
     "gpt-4o-mini",
+    "claude-3-7-sonnet-latest",
+    "claude-3-5-haiku-latest"
 ]
+
+# What day is today?
+
+registry = ToolRegistry()
+registry.register('today', today)
 
 
 @cl.on_chat_start
 async def start():
     cl.user_session.set("message_history", [])
-    cl.user_session.set("default_model", 'gpt-4o-mini')
+    # cl.user_session.set("default_model", 'gpt-4o-mini')
+    cl.user_session.set("default_model", 'claude-3-7-sonnet-latest')
     cl.user_session.set("previous_response_id", None)
     cl.user_session.set("temperature", 0.1)
     cl.user_session.set("vectorstore", os.environ.get("OPENAI_VECTOR_STORE_ID", None))
@@ -88,6 +98,10 @@ async def settings_update(settings):
 async def set_starters():
     return [
         cl.Starter(
+            label="Today",
+            message="What day is today?",
+        ),
+        cl.Starter(
             label="Pirate Joke",
             message="Tell me a pirate joke",
         ),
@@ -106,9 +120,11 @@ async def on_message(message: cl.Message):
 
         return
 
-    llm = AsyncLLMClient()
+    llm = AsyncLLMClient(tool_registry=registry)
 
-    tools = []
+    tools = [
+        *registry.get_schemas()
+    ]
     vectorstore = cl.user_session.get("vectorstore")
     if vectorstore:
         all_vector_stores = vectorstore.split(",")
@@ -116,13 +132,13 @@ async def on_message(message: cl.Message):
         all_vector_stores = [vs.strip() for vs in all_vector_stores if vs.strip()]
 
         # add vector stores to the tools list
-        for vs in all_vector_stores:
-            tools.append(
-                {
-                    "type": "file_search",
-                    "vector_store_ids": [vs],
-                }
-            )
+        # for vs in all_vector_stores:
+        #     tools.append(
+        #         {
+        #             "type": "file_search",
+        #             "vector_store_ids": [vs],
+        #         }
+        #     )
 
         cl.logger.info(f"Using vector store: {cl.user_session.get('vectorstore')}")
 
@@ -131,28 +147,26 @@ async def on_message(message: cl.Message):
 
     thinking = cl.Step(name="Searching and Processing")
     async with thinking:
-        try:
-            # Show thinking element during the entire process
-            thinking_message = await cl.Message(content="Thinking...").send()
+        # try:
+        # Show thinking element during the entire process
+        thinking_message = await cl.Message(content="Thinking...").send()
 
-            llm_response: LLMResponse = await llm.response(
-                message.content,
-                cl.user_session.get("default_model"),
-                instructions=cl.user_session.get("instructions"),
-                temperature=cl.user_session.get("temperature"),
-                tools=tools,
-                use_responses_api=True,
-                previous_response_id=cl.user_session.get("previous_response_id"),
-            )
+        llm_response: LLMResponse = await llm.response(
+            message.content,
+            cl.user_session.get("default_model"),
+            instructions=cl.user_session.get("instructions"),
+            temperature=cl.user_session.get("temperature"),
+            tools=tools,
+            use_responses_api=False,
+            previous_response_id=cl.user_session.get("previous_response_id"),
+        )
 
-            # Store the response ID in the user session
-            cl.user_session.set("previous_response_id", llm_response.get("response_id"))
+        # Store the response ID in the user session
+        cl.user_session.set("previous_response_id", llm_response.get("response_id"))
 
-            thinking_message.content = llm_response.get("text")
-            # thinking_message.metadata = {"tokens": llm_response.get("input_tokens") + llm_response.get("output_tokens")}
-            thinking.input = message.content
-            thinking.output = {"tokens": llm_response.get("input_tokens") + llm_response.get("output_tokens")}
-            await thinking_message.send()
+        thinking_message.content = llm_response.get("text")
+        thinking.input = message.content
+        thinking.output = {"tokens": llm_response.get("input_tokens") + llm_response.get("output_tokens")}
+        await thinking_message.send()
 
-        except Exception as e:
-            cl.logger.error(f"Error in thinking step: {e}")
+    #
