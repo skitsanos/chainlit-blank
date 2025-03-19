@@ -123,7 +123,10 @@ async def on_message(message: cl.Message):
     llm = AsyncLLMClient(tool_registry=registry)
 
     tools = [
-        *registry.get_schemas()
+        *registry.get_schemas(),
+        {
+            "type": "web_search_preview",
+        }
     ]
     vectorstore = cl.user_session.get("vectorstore")
     if vectorstore:
@@ -157,7 +160,7 @@ async def on_message(message: cl.Message):
             instructions=cl.user_session.get("instructions"),
             temperature=cl.user_session.get("temperature"),
             tools=tools,
-            use_responses_api=False,
+            use_responses_api=True,
             previous_response_id=cl.user_session.get("previous_response_id"),
         )
 
