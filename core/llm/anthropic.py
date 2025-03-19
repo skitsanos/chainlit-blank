@@ -4,8 +4,8 @@ from typing import List, Dict, Any, Union, Optional
 from anthropic import AsyncAnthropic
 
 from core.llm.tool_handling import prepare_tools_for_api
+from core.llm.tooling import ToolRegistry
 from core.llm.types import Message, LLMResponse
-from core.tooling import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ async def handle_anthropic_api(
         ]
     else:
         # Handle message list - extract system message if present
+        # Filter out tool messages since Anthropic doesn't support them
         for msg in user_input:
             role = msg.get("role")
             content = msg.get("content", "")
@@ -43,11 +44,10 @@ async def handle_anthropic_api(
             if role == "system" or role == "developer":
                 if content and not instructions:  # Only override if instructions not provided
                     system_prompt = content
-            elif role in ["user", "assistant"]:
+            elif role == "user" or role == "assistant":
+                # Include only user and assistant messages
                 anthropic_messages.append({"role": role, "content": content})
-            else:
-                # Default fallback for unsupported roles
-                anthropic_messages.append({"role": "user", "content": content})
+            # Skip tool messages completely
 
     # Prepare parameters for Anthropic API
     anthropic_params = {
@@ -62,13 +62,13 @@ async def handle_anthropic_api(
     # Only add tools if we have properly formatted ones
     if tools:
         # Prepare tools with Anthropic format
-        anthropic_params["tools"] = prepare_tools_for_api(tools, 'anthropic')
-        # Use auto tool choice
-        anthropic_params["tool_choice"] = {"type": "auto"}
-        logger.info(f"Sending {len(tools)} tools to Anthropic API")
+        formatted_tools = prepare_tools_for_api(tools, 'anthropic')
+        if formatted_tools:
+            anthropic_params["tools"] = formatted_tools
+            logger.info(f"Sending {len(formatted_tools)} tools to Anthropic API")
 
     # Log parameters for debugging
-    logger.info(f"Anthropic API parameters: {anthropic_params}")
+    logger.debug(f"Anthropic API parameters: {anthropic_params}")
 
     # Call Anthropic API
     try:
@@ -76,76 +76,125 @@ async def handle_anthropic_api(
 
         # Process tool use in the response if present
         final_text = ""
-        tool_calls = []
+        tool_use_blocks = []
 
         for content_block in message.content:
             if content_block.type == "text":
                 final_text += content_block.text
             elif content_block.type == "tool_use":
-                # Process tool use blocks
-                try:
-                    tool_name = content_block.name
-                    tool_id = content_block.id
-                    tool_input = content_block.input
+                # Collect tool use blocks to process
+                tool_use_blocks.append(content_block)
 
-                    # Validate tool exists in registry
-                    if not tool_registry.has_tool(tool_name):
-                        logger.warning(f"Tool {tool_name} not found in registry")
-                        continue
+        # If no tool use blocks, return the response as is
+        if not tool_use_blocks:
+            return {
+                "text": final_text,
+                "input_tokens": message.usage.input_tokens,
+                "output_tokens": message.usage.output_tokens,
+                "response_id": None
+            }
 
-                    # Execute the tool
-                    result = await tool_registry.execute_tool(tool_name, tool_input or {})
+        # Process all tool use blocks
+        tool_results_text = "I called the following tools:\n\n"
 
-                    # Store the tool call information
-                    tool_calls.append({
-                        "tool_call_id": tool_id,
-                        "output": str(result)
-                    })
-                except Exception as e:
-                    logger.error(f"Error processing tool call {content_block.name}: {e}")
+        for block in tool_use_blocks:
+            try:
+                tool_name = block.name
+                tool_id = block.id
+                tool_input = block.input or {}
 
-        # If we had tool calls, we need to make a follow-up call
-        if tool_calls:
-            # Modify the input to include tool outputs
-            anthropic_messages.append({
-                "role": "assistant",
-                "content": final_text
-            })
+                # Log the tool input for debugging
+                logger.debug(f"Tool input for {tool_name}: {tool_input}")
 
-            for tool_call in tool_calls:
-                anthropic_messages.append({
-                    "role": "tool",
-                    "content": tool_call["output"],
-                    "tool_call_id": tool_call["tool_call_id"]
-                })
+                # Validate tool exists in registry
+                if not tool_registry.has_tool(tool_name):
+                    logger.warning(f"Tool {tool_name} not found in registry")
+                    tool_results_text += f"- {tool_name}: Tool not found in registry\n"
+                    continue
 
-            # Recursive call with tool outputs
-            return await handle_anthropic_api(
-                client=client,
-                tool_registry=tool_registry,
-                user_input=anthropic_messages,
-                model=model,
-                instructions=system_prompt,
-                tools=tools,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs
-            )
+                # Execute the tool
+                result = await tool_registry.execute_tool(tool_name, tool_input)
 
-        return {
-            "text": final_text,
-            "input_tokens": message.usage.input_tokens,
-            "output_tokens": message.usage.output_tokens,
-            "response_id": None  # Claude doesn't provide a response ID in the same way
+                # Format the result
+                if isinstance(result, dict):
+                    formatted_result = str(result)  # Convert dict to string
+                else:
+                    formatted_result = str(result)
+
+                # Add to results text
+                tool_results_text += f"- {tool_name}: {formatted_result}\n"
+                logger.info(f"Tool processed: {tool_name}")
+            except Exception as e:
+                logger.error(f"Error processing tool use block: {e}")
+                tool_results_text += f"- {tool_name}: Error - {str(e)}\n"
+
+        # Make a follow-up call with the tool results as a user message
+        follow_up_messages = anthropic_messages.copy()
+
+        # Add the assistant's response with tool calls
+        follow_up_messages.append({"role": "assistant", "content": final_text})
+
+        # Add a user message with tool results
+        follow_up_messages.append({"role": "user", "content": tool_results_text})
+
+        # Create the follow-up request
+        follow_up_params = {
+            "model": model,
+            "messages": follow_up_messages,
+            "system": system_prompt,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            **{k: v for k, v in kwargs.items() if k not in ['tools', 'tool_choice']}
         }
+
+        # Keep the tools from the original request
+        if 'tools' in anthropic_params:
+            follow_up_params['tools'] = anthropic_params['tools']
+
+        try:
+            follow_up_message = await client.messages.create(**follow_up_params)
+
+            # Extract final text
+            follow_up_text = ""
+            for content_block in follow_up_message.content:
+                if content_block.type == "text":
+                    follow_up_text += content_block.text
+
+            return {
+                "text": follow_up_text,
+                "input_tokens": follow_up_message.usage.input_tokens,
+                "output_tokens": follow_up_message.usage.output_tokens,
+                "response_id": None
+            }
+
+        except Exception as e:
+            logger.error(f"Error in follow-up call: {e}")
+            # Fall back to returning the initial message
+            return {
+                "text": final_text + "\n\n[Tool results could not be processed: " + str(e) + "]",
+                "input_tokens": message.usage.input_tokens,
+                "output_tokens": message.usage.output_tokens,
+                "response_id": None
+            }
 
     except Exception as e:
         logger.error(f"Anthropic API error: {str(e)}")
-        if "Extra inputs are not permitted" in str(e) or "tool_choice" in str(e):
+        if "Extra inputs are not permitted" in str(e) or "tool_choice" in str(e) or "Unexpected role" in str(e):
             # If we get tool-related errors, try without tools
             logger.warning("Retrying Anthropic API call without tools")
             anthropic_params.pop("tools", None)
             anthropic_params.pop("tool_choice", None)
+
+            # Ensure all messages have simple string content
+            for i, msg in enumerate(anthropic_params["messages"]):
+                if isinstance(msg.get("content"), list):
+                    # Convert structured content back to string
+                    text_content = ""
+                    for item in msg["content"]:
+                        if item.get("type") == "text":
+                            text_content += item.get("text", "")
+                    anthropic_params["messages"][i]["content"] = text_content
+
             message = await client.messages.create(**anthropic_params)
 
             final_text = ""

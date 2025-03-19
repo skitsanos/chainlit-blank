@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated
 
-from core.tooling import llm_tool
+from core.llm.tooling import llm_tool
 
 
 @llm_tool

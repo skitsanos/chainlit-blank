@@ -5,8 +5,8 @@ from typing import List, Dict, Any, Union, Optional
 from openai import AsyncOpenAI
 
 from core.llm.tool_handling import prepare_tools_for_api
+from core.llm.tooling import ToolRegistry
 from core.llm.types import Message, LLMResponse
-from core.tooling import ToolRegistry
 
 logger = logging.getLogger(__name__)
 

@@ -4,9 +4,9 @@ from typing import List, Dict, Any, Union, Optional
 
 from openai import AsyncOpenAI
 
-from core.llm.tool_handling import is_internal_tool
+from core.llm.tool_handling import extract_tool_info
+from core.llm.tooling import ToolRegistry
 from core.llm.types import Message, LLMResponse
-from core.tooling import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +117,11 @@ async def handle_responses_api(
 
     # Check for function call tool calls in the response
     # We need to filter to only process function calls, NOT internal tools like file_search
-    function_calls = [item for item in response.output
-                      if item.type == "function_call" and not is_internal_tool(getattr(item, "type", None))]
+    function_calls = []
+    for item in response.output:
+        tool_info = extract_tool_info(item)
+        if tool_info['name'] and item.type == "function_call" and not tool_registry.is_internal_tool(item.type):
+            function_calls.append(item)
 
     # If we have function calls and haven't reached max depth, process them
     if function_calls and current_tool_call_depth < max_tool_call_depth:

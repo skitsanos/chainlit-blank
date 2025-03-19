@@ -1,15 +1,52 @@
 import json
 import logging
 import uuid
-from typing import Dict
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
 
-def is_internal_tool(tool_type: str) -> bool:
-    """Return True if this tool type is handled internally by OpenAI"""
-    internal_tool_types = ["file_search", "web_search", "code_interpreter", "retrieval"]
-    return tool_type in internal_tool_types
+def extract_tool_info(tool_call) -> Dict[str, Any]:
+    """
+    Extract consistent tool information from different tool call formats
+
+    Args:
+        tool_call: A tool call object from any provider
+
+    Returns:
+        Dictionary with standardized tool information
+    """
+    tool_info = {
+        'id': None,
+        'name': None,
+        'type': None,
+        'arguments': None,
+    }
+
+    # Try to extract the tool ID
+    if hasattr(tool_call, 'call_id'):
+        tool_info['id'] = tool_call.call_id
+    elif hasattr(tool_call, 'id'):
+        tool_info['id'] = tool_call.id
+
+    # Try to extract tool type
+    if hasattr(tool_call, 'type'):
+        tool_info['type'] = tool_call.type
+
+    # Try to extract tool name and arguments
+    if hasattr(tool_call, 'name'):
+        tool_info['name'] = tool_call.name
+    if hasattr(tool_call, 'arguments'):
+        tool_info['arguments'] = tool_call.arguments
+
+    # Handle nested function structure (OpenAI Chat Completions API)
+    if hasattr(tool_call, 'function'):
+        if not tool_info['name'] and hasattr(tool_call.function, 'name'):
+            tool_info['name'] = tool_call.function.name
+        if not tool_info['arguments'] and hasattr(tool_call.function, 'arguments'):
+            tool_info['arguments'] = tool_call.function.arguments
+
+    return tool_info
 
 
 def prepare_tools_for_api(tools_list, api_type):
@@ -18,7 +55,7 @@ def prepare_tools_for_api(tools_list, api_type):
 
     Args:
         tools_list: List of tool definitions
-        api_type: Either 'responses' or 'completions'
+        api_type: Either 'responses', 'completions', or 'anthropic'
 
     Returns:
         Properly formatted tools list for the specified API
@@ -33,8 +70,11 @@ def prepare_tools_for_api(tools_list, api_type):
         # Chat Completions API only accepts function tools with specific format
         formatted_tools = []
         for tool in tools_list:
-            if tool.get('type') == 'function':
-                tool["function"]["name"] = tool['name']
+            # Skip internal tools for Chat Completions API
+            if tool.get('type') in ['function', None]:
+                # Ensure function tools have name in both places
+                if 'function' in tool:
+                    tool["function"]["name"] = tool.get('name', tool["function"].get('name'))
                 formatted_tools.append(tool)
 
         return formatted_tools if formatted_tools else None
@@ -42,12 +82,14 @@ def prepare_tools_for_api(tools_list, api_type):
         # Anthropic API requires a different format
         formatted_tools = []
         for tool in tools_list:
-            anthropic_tool = {
-                "name": tool['name'],
-                "description": tool["function"].get('description', ''),
-                "input_schema": tool["function"].get('parameters', {}),
-            }
-            formatted_tools.append(anthropic_tool)
+            # Skip internal tools for Anthropic API
+            if tool.get('type') in ['function', None]:
+                anthropic_tool = {
+                    "name": tool.get('name'),
+                    "description": tool.get("function", {}).get('description', ''),
+                    "input_schema": tool.get("function", {}).get('parameters', {}),
+                }
+                formatted_tools.append(anthropic_tool)
 
         return formatted_tools if formatted_tools else None
 
@@ -61,8 +103,10 @@ def create_shortened_tool_ids(tool_calls) -> Dict[str, str]:
     for tool_call in tool_calls:
         # Generate a new UUID that's exactly 36 characters
         short_id = f"call_{str(uuid.uuid4())[:35 - 5]}"  # Keep under 40 chars
-        id_mapping[getattr(tool_call, 'call_id', tool_call.id if hasattr(tool_call, 'id') else 'unknown')] = short_id
-        logger.info(f"Mapped original ID {getattr(tool_call, 'call_id', 'unknown')} to shorter ID {short_id}")
+        original_id = getattr(tool_call, 'call_id',
+                              getattr(tool_call, 'id', 'unknown'))
+        id_mapping[original_id] = short_id
+        logger.info(f"Mapped original ID {original_id} to shorter ID {short_id}")
 
     return id_mapping
 
@@ -86,19 +130,17 @@ async def process_function_calls(tool_registry, function_calls, id_mapping=None)
 
     for tool_call in function_calls:
         try:
-            # Extract function details
-            function_name = getattr(tool_call, 'name', None)
-            if not function_name and hasattr(tool_call, 'function'):
-                function_name = tool_call.function.name
+            # Extract tool info consistently across different formats
+            tool_info = extract_tool_info(tool_call)
 
-            arguments_json = getattr(tool_call, 'arguments', None)
-            if not arguments_json and hasattr(tool_call, 'function'):
-                arguments_json = tool_call.function.arguments
+            # Skip internal tools
+            if tool_info['type'] and tool_registry.is_internal_tool(tool_info['type']):
+                logger.info(f"Skipping internal tool of type {tool_info['type']}")
+                continue
 
-            # Get the original ID
-            original_id = getattr(tool_call, 'call_id', None)
-            if not original_id and hasattr(tool_call, 'id'):
-                original_id = tool_call.id
+            function_name = tool_info['name']
+            arguments_json = tool_info['arguments']
+            original_id = tool_info['id']
 
             # Use the shortened ID if available
             tool_call_id = id_mapping.get(original_id, original_id)
@@ -151,8 +193,14 @@ async def process_function_calls(tool_registry, function_calls, id_mapping=None)
             error_message = f"Unexpected error processing tool call: {str(e)}"
             logger.error(error_message)
             # Try to get tool_call_id if possible
-            tool_call_id = id_mapping.get(getattr(tool_call, 'call_id',
-                                                  getattr(tool_call, 'id', 'unknown')), 'error_id')
+            tool_call_id = 'error_id'
+            try:
+                original_id = getattr(tool_call, 'call_id',
+                                      getattr(tool_call, 'id', 'unknown'))
+                tool_call_id = id_mapping.get(original_id, 'error_id')
+            except:
+                pass
+
             tool_responses.append({
                 "tool_call_id": tool_call_id,
                 "output": error_message
@@ -180,21 +228,18 @@ def prepare_assistant_message_with_tool_calls(content, function_calls, id_mappin
     }
 
     for tool_call in function_calls:
+        # Extract tool info consistently
+        tool_info = extract_tool_info(tool_call)
+
         # Get original ID
-        original_id = getattr(tool_call, 'call_id',
-                              getattr(tool_call, 'id', None))
+        original_id = tool_info['id']
 
         # Use shortened ID
         short_id = id_mapping.get(original_id, original_id)
 
         # Get function name and arguments
-        function_name = getattr(tool_call, 'name', None)
-        if not function_name and hasattr(tool_call, 'function'):
-            function_name = tool_call.function.name
-
-        arguments_json = getattr(tool_call, 'arguments', None)
-        if not arguments_json and hasattr(tool_call, 'function'):
-            arguments_json = tool_call.function.arguments
+        function_name = tool_info['name']
+        arguments_json = tool_info['arguments']
 
         assistant_message["tool_calls"].append({
             "id": short_id,

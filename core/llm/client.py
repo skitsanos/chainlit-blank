@@ -11,8 +11,8 @@ from openai.types.responses import ResponseFunctionToolCall
 from core.llm.anthropic import handle_anthropic_api
 from core.llm.chat_completions import handle_chat_completions_api, prepare_messages
 from core.llm.responses_api import handle_responses_api
+from core.llm.tooling import ToolRegistry
 from core.llm.types import Message, LLMResponse
-from core.tooling import ToolRegistry
 
 logger = logging.getLogger(__name__)
 

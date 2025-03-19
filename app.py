@@ -6,7 +6,7 @@ from chainlit.input_widget import Select, Slider, TextInput
 
 from core.commands import assistant_commands
 from core.llm import AsyncLLMClient, LLMResponse
-from core.tooling import ToolRegistry
+from core.llm.tooling import ToolRegistry
 from tools.date_and_time import today
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,8 @@ registry.register('today', today)
 @cl.on_chat_start
 async def start():
     cl.user_session.set("message_history", [])
-    # cl.user_session.set("default_model", 'gpt-4o-mini')
-    cl.user_session.set("default_model", 'claude-3-7-sonnet-latest')
+    cl.user_session.set("default_model", 'gpt-4o-mini')
+    # cl.user_session.set("default_model", 'claude-3-7-sonnet-latest')
     cl.user_session.set("previous_response_id", None)
     cl.user_session.set("temperature", 0.1)
     cl.user_session.set("vectorstore", os.environ.get("OPENAI_VECTOR_STORE_ID", None))
@@ -132,13 +132,13 @@ async def on_message(message: cl.Message):
         all_vector_stores = [vs.strip() for vs in all_vector_stores if vs.strip()]
 
         # add vector stores to the tools list
-        # for vs in all_vector_stores:
-        #     tools.append(
-        #         {
-        #             "type": "file_search",
-        #             "vector_store_ids": [vs],
-        #         }
-        #     )
+        for vs in all_vector_stores:
+            tools.append(
+                {
+                    "type": "file_search",
+                    "vector_store_ids": [vs],
+                }
+            )
 
         cl.logger.info(f"Using vector store: {cl.user_session.get('vectorstore')}")
 
