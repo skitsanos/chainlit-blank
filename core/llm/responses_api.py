@@ -11,6 +11,46 @@ from core.llm.types import Message, LLMResponse
 logger = logging.getLogger(__name__)
 
 
+def extract_cited_files(response_output):
+    cited_files = []
+
+    # Iterate through response items
+    for item in response_output:
+        # Check if it's a message item with content
+        if hasattr(item, 'content') and item.content:
+            # Iterate through content items (which may contain annotations)
+            for content_item in item.content:
+                # Check if the content item has annotations
+                if hasattr(content_item, 'annotations') and content_item.annotations:
+                    # Iterate through annotations
+                    for annotation in content_item.annotations:
+                        # Check if it's a file citation annotation
+                        if hasattr(annotation, 'type') and annotation.type == 'file_citation':
+                            # Add file information to our list
+                            cited_files.append({
+                                'file_id': annotation.file_id,
+                                'filename': annotation.filename,
+                                'index': annotation.index
+                            })
+
+    return cited_files
+
+
+# If you only want the filenames:
+def extract_filenames(response_output):
+    filenames = []
+
+    for item in response_output:
+        if hasattr(item, 'content') and item.content:
+            for content_item in item.content:
+                if hasattr(content_item, 'annotations') and content_item.annotations:
+                    for annotation in content_item.annotations:
+                        if hasattr(annotation, 'type') and annotation.type == 'file_citation':
+                            filenames.append(annotation.filename)
+
+    return filenames
+
+
 async def handle_responses_api(
         client: AsyncOpenAI,
         tool_registry: ToolRegistry,
@@ -33,7 +73,8 @@ async def handle_responses_api(
             "text": "I've reached the maximum number of tool calls I can make for this request. Please provide more specific instructions if needed.",
             "input_tokens": 0,
             "output_tokens": 0,
-            "response_id": None
+            "response_id": None,
+            "sources": [],
         }
 
     # Prepare request parameters for Responses API
@@ -209,13 +250,16 @@ async def handle_responses_api(
                 current_tool_call_depth=current_tool_call_depth + 1,
                 max_tool_call_depth=max_tool_call_depth,
                 tool_outputs=tool_outputs,  # Add tool outputs via kwargs
+                include=["file_search_call.results"],
                 **{k: v for k, v in kwargs.items() if k != 'tool_outputs'}  # Pass through other kwargs
             )
 
     # If no tool calls or max depth reached, return the response as is
+
     return {
         "text": response.output_text,
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
-        "response_id": response.id
+        "response_id": response.id,
+        "sources": extract_cited_files(response.output),
     }

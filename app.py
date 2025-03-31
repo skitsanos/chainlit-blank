@@ -154,22 +154,27 @@ async def on_message(message: cl.Message):
         # Show thinking element during the entire process
         thinking_message = await cl.Message(content="Thinking...").send()
 
-        llm_response: LLMResponse = await llm.response(
-            message.content,
-            cl.user_session.get("default_model"),
-            instructions=cl.user_session.get("instructions"),
-            temperature=cl.user_session.get("temperature"),
-            tools=tools,
-            use_responses_api=True,
-            previous_response_id=cl.user_session.get("previous_response_id"),
-        )
+        try:
+            llm_response: LLMResponse = await llm.response(
+                message.content,
+                cl.user_session.get("default_model"),
+                instructions=cl.user_session.get("instructions"),
+                temperature=cl.user_session.get("temperature"),
+                tools=tools,
+                use_responses_api=True,
+                previous_response_id=cl.user_session.get("previous_response_id"),
+            )
 
-        # Store the response ID in the user session
-        cl.user_session.set("previous_response_id", llm_response.get("response_id"))
+            # Store the response ID in the user session
+            cl.user_session.set("previous_response_id", llm_response.get("response_id"))
 
-        thinking_message.content = llm_response.get("text")
-        thinking.input = message.content
-        thinking.output = {"tokens": llm_response.get("input_tokens") + llm_response.get("output_tokens")}
-        await thinking_message.send()
+            thinking_message.content = llm_response.get("text")
+            thinking.input = message.content
+            thinking.output = {"tokens": llm_response.get("input_tokens") + llm_response.get("output_tokens")}
+            await thinking_message.send()
+        except Exception as e:
+            cl.logger.error(f"Error in LLM response: {e}")
+            thinking_message.content = f"An error occurred while processing your request. {e}"
+            await thinking_message.send()
 
     #

@@ -13,3 +13,4 @@ class LLMResponse(TypedDict):
     input_tokens: int
     output_tokens: int
     response_id: Optional[str]
+    sources: Optional[list[str]]
